@@ -1,0 +1,243 @@
+# This file deploys Prometheus, Grafana, Tempo, and Loki on the monitoring node
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: telemetry-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+        node-type: monitoring
+    spec:
+      nodeSelector:
+        role: monitoring
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+        effect: NoSchedule
+      containers:
+      - name: prometheus
+        image: prom/prometheus:latest
+        ports:
+        - containerPort: 9090
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: telemetry-system
+spec:
+  selector:
+    app: prometheus
+  ports:
+  - port: 9090
+    targetPort: 9090
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: telemetry-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+        node-type: monitoring
+    spec:
+      nodeSelector:
+        role: monitoring
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+        effect: NoSchedule
+      containers:
+      - name: grafana
+        image: grafana/grafana:latest
+        ports:
+        - containerPort: 3000
+        env:
+        - name: GF_AUTH_ANONYMOUS_ENABLED
+          value: "true"
+        - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+          value: "Admin"
+        - name: GF_AUTH_DISABLE_LOGIN_FORM
+          value: "true"
+        - name: GF_FEATURE_TOGGLES_ENABLE
+          value: "tempoApmTable"
+        volumeMounts:
+        - name: grafana-config
+          mountPath: /etc/grafana/provisioning
+      volumes:
+      - name: grafana-config
+        configMap:
+          name: grafana-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: telemetry-system
+spec:
+  selector:
+    app: grafana
+  ports:
+  - port: 3000
+    targetPort: 3000
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tempo
+  namespace: telemetry-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tempo
+  template:
+    metadata:
+      labels:
+        app: tempo
+        node-type: monitoring
+    spec:
+      nodeSelector:
+        role: monitoring
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+        effect: NoSchedule
+      containers:
+      - name: tempo
+        image: grafana/tempo:2.0.1
+        args: ["-config.file=/etc/tempo.yaml"]
+        ports:
+        - containerPort: 3200
+        - containerPort: 4317
+        - containerPort: 4318
+        - containerPort: 9411
+        volumeMounts:
+        - name: tempo-config
+          mountPath: /etc/tempo.yaml
+          subPath: tempo.yaml
+        - name: tempo-data
+          mountPath: /tmp/tempo/blocks
+      volumes:
+      - name: tempo-config
+        configMap:
+          name: tempo-config
+      - name: tempo-data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tempo
+  namespace: telemetry-system
+spec:
+  selector:
+    app: tempo
+  ports:
+  - name: ui
+    port: 3200
+    targetPort: 3200
+  - name: otlp-grpc
+    port: 4317
+    targetPort: 4317
+  - name: otlp-http
+    port: 4318
+    targetPort: 4318
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loki
+  namespace: telemetry-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: loki
+  template:
+    metadata:
+      labels:
+        app: loki
+        node-type: monitoring
+    spec:
+      nodeSelector:
+        role: monitoring
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+        effect: NoSchedule
+      securityContext:
+        runAsUser: 0  # Run as root
+        fsGroup: 0
+      containers:
+      - name: loki
+        image: grafana/loki:latest
+        args:
+        - "-config.file=/etc/loki.yaml"
+        - "-validation.allow-structured-metadata=false"
+        ports:
+        - containerPort: 3100
+        volumeMounts:
+        - name: loki-config
+          mountPath: /etc/loki.yaml
+          subPath: loki.yaml
+        - name: loki-runtime-config
+          mountPath: /tmp/loki/runtime-config.yaml
+          subPath: runtime-config.yaml
+        - name: loki-data
+          mountPath: /tmp/loki
+        - name: loki-wal
+          mountPath: /wal
+      volumes:
+      - name: loki-config
+        configMap:
+          name: loki-config
+      - name: loki-runtime-config
+        configMap:
+          name: loki-runtime-config
+      - name: loki-data
+        emptyDir: {}
+      - name: loki-wal
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki
+  namespace: telemetry-system
+spec:
+  selector:
+    app: loki
+  ports:
+  - port: 3100
+    targetPort: 3100
+  type: ClusterIP

@@ -1,0 +1,6 @@
+# Apply these labels to your nodes using kubectl
+# For the monitoring node:
+# kubectl label nodes <node-name> role=monitoring
+
+# For the application node:
+# kubectl label nodes <node-name> role=application

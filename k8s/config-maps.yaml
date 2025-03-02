@@ -1,0 +1,166 @@
+# This file contains the ConfigMaps for all your configuration files
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alloy-config
+  namespace: telemetry-system
+data:
+  config.alloy: |
+    // OTLP Receiver - Collects telemetry data via OTLP protocol
+    otelcol.receiver.otlp "default" {
+      // HTTP endpoint for OTLP over HTTP
+      http {
+        endpoint = "0.0.0.0:4318"
+      }
+      
+      // gRPC endpoint for OTLP over gRPC
+      grpc {
+        endpoint = "0.0.0.0:4317"
+      }
+      
+      // Route the received data to the batch processor
+      output {
+        traces  = [otelcol.processor.batch.default.input]
+        metrics = [otelcol.processor.batch.default.input]
+        logs    = [otelcol.processor.batch.default.input]
+      }
+    }
+
+    // File log collection
+    otelcol.receiver.filelog "docker" {
+      include = [ "/var/log/*.log", "/var/lib/docker/containers/*/*.log" ]
+      output {
+        logs = [otelcol.processor.batch.default.input]
+      }
+    }
+
+    // Batch processor - Efficiently batches telemetry data
+    otelcol.processor.batch "default" {
+      // Route processed data to the appropriate exporters
+      output {
+        metrics = [otelcol.exporter.prometheus.default.input]
+        logs    = [otelcol.exporter.loki.default.input]
+        traces  = [otelcol.exporter.otlp.tempo.input]
+      }
+    }
+
+    // Prometheus exporter - For metrics
+    otelcol.exporter.prometheus "default" {
+      // Send metrics to Prometheus
+      forward_to = [prometheus.remote_write.prom.receiver]
+    }
+
+    // Prometheus remote write configuration
+    prometheus.remote_write "prom" {
+      // Configure Prometheus endpoint
+      endpoint {
+        url = "http://prometheus.telemetry-system.svc.cluster.local:9090/api/v1/push"
+      }
+    }
+
+    // Loki exporter - For logs
+    otelcol.exporter.loki "default" {
+      // Forward logs to Loki
+      forward_to = [loki.write.logs.receiver]
+    }
+
+    // Loki write configuration
+    loki.write "logs" {
+      // Configure Loki endpoint
+      endpoint {
+        url = "http://loki.telemetry-system.svc.cluster.local:3100/loki/api/v1/push"
+      }
+    }
+
+    // Tempo exporter - For traces
+    otelcol.exporter.otlp "tempo" {
+      // Configure client for sending traces to Tempo
+      client {
+        endpoint = "tempo.telemetry-system.svc.cluster.local:4317"
+        tls {
+          insecure = true
+        }
+      }
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tempo-config
+  namespace: telemetry-system
+data:
+  tempo.yaml: |
+    server:
+      http_listen_port: 3200
+    storage:
+      trace:
+        backend: local
+        local:
+          path: /tmp/tempo/blocks
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-config
+  namespace: telemetry-system
+data:
+  loki.yaml: |
+    auth_enabled: false
+    server:
+      http_listen_port: 3100
+    ingester:
+      lifecycler:
+        ring:
+          kvstore:
+            store: inmemory
+          replication_factor: 1
+      chunk_idle_period: 5m
+      chunk_retain_period: 30s
+    schema_config:
+      configs:
+        - from: 2020-05-15
+          store: boltdb
+          object_store: filesystem
+          schema: v11
+          index:
+            prefix: index_
+            period: 24h
+    storage_config:
+      boltdb:
+        directory: /tmp/loki/index
+      filesystem:
+        directory: /tmp/loki/chunks
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-runtime-config
+  namespace: telemetry-system
+data:
+  runtime-config.yaml: |
+    {}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-config
+  namespace: telemetry-system
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: false
+      - name: Tempo
+        type: tempo
+        access: proxy
+        url: http://tempo:3200
+        isDefault: false
+      - name: Loki
+        type: loki
+        access: proxy
+        url: http://loki:3100
+        isDefault: true
