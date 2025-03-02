@@ -1,0 +1,4 @@
+# Loki runtime configuration
+overrides:
+  ingester_limits:
+    max_global_streams_per_user: 0

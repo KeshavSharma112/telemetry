@@ -1,0 +1,119 @@
+services:
+  alloy:
+    image: grafana/alloy:latest
+    container_name: alloy
+    hostname: otelcol
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "12345:12345"   # Alloy UI (map internal 8080 port to host 12345)
+    volumes:
+      - ./config.alloy:/etc/alloy/config.alloy
+    networks:
+      - telemetry-network
+    command: ["run", "--server.http.listen-addr=0.0.0.0:12345", "/etc/alloy/config.alloy"]
+    restart: unless-stopped
+    depends_on:
+      loki:
+        condition: service_healthy
+      tempo:
+        condition: service_started
+      prometheus:
+        condition: service_started
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    networks:
+      - telemetry-network
+
+  tempo:
+    image: grafana/tempo:2.0.1
+    ports:
+      - "3200:3200" # Tempo UI
+      - "4319:4317" # OTLP gRPC
+      - "4320:4318" # OTLP HTTP
+      - "9411:9411" # Zipkin
+      - "9095:9095" # Query Frontend port
+    command: ["-config.file=/etc/tempo.yaml"]
+    environment:
+      - JAEGER_DISABLED=true
+      - TEMPO_STORAGE_TRACE_BACKEND=local
+    volumes:
+      - ./tempo-config.yaml:/etc/tempo.yaml
+      - tempo-data:/tmp/tempo/blocks
+    networks:
+      - telemetry-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider --tries=1 http://localhost:3200/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:latest
+    user: "0"
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki.yaml -validation.allow-structured-metadata=false
+    volumes:
+      - ./loki-config.yaml:/etc/loki.yaml
+      - ./loki-runtime-config.yaml:/tmp/loki/runtime-config.yaml
+      - loki-data:/tmp/loki
+    networks:
+      - telemetry-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --tries=1 -O- http://localhost:3100/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+      - "8500:8500" # Grafana UI
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+      - GF_LOG_LEVEL=debug
+      - GF_FEATURE_TOGGLES_ENABLE=tempoApmTable
+      - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    networks:
+      - telemetry-network
+    depends_on:
+      - prometheus
+      - tempo
+      - loki
+    restart: unless-stopped
+
+  # app:
+  #   image: testnode-app
+  #   ports:
+  #     - "8080:8080"
+  #   networks:
+  #     - telemetry-network
+  #   depends_on:
+  #     - alloy
+  #   logging:
+  #     driver: json-file
+  #     options:
+  #       max-size: "10m"
+  #       max-file: "3"
+
+volumes:
+  loki-data:
+    driver: local
+  tempo-data:
+    driver: local
+
+networks:
+  telemetry-network:
+    driver: bridge

@@ -1,0 +1,73 @@
+// OTLP Receiver - Collects telemetry data via OTLP protocol
+otelcol.receiver.otlp "default" {
+  // HTTP endpoint for OTLP over HTTP
+  http {
+    endpoint = "0.0.0.0:4318"
+  }
+  
+  // gRPC endpoint for OTLP over gRPC
+  grpc {
+    endpoint = "0.0.0.0:4317"
+  }
+  
+  // Route the received data to the batch processor
+  output {
+    traces  = [otelcol.processor.batch.default.input]
+    metrics = [otelcol.processor.batch.default.input]
+    logs    = [otelcol.processor.batch.default.input]
+  }
+}
+
+// Batch processor - Efficiently batches telemetry data
+otelcol.processor.batch "default" {
+  // Route processed data to the appropriate exporters
+  output {
+    metrics = [otelcol.exporter.prometheus.default.input]
+    logs    = [otelcol.exporter.loki.default.input]
+    traces  = [otelcol.exporter.otlp.tempo.input]
+  }
+}
+
+// Prometheus exporter - For metrics
+otelcol.exporter.prometheus "default" {
+  // Send metrics to Prometheus
+  forward_to = [prometheus.remote_write.prom.receiver]
+}
+
+// Prometheus remote write configuration
+prometheus.remote_write "prom" {
+  // Configure Prometheus endpoint
+  endpoint {
+    url = "http://prometheus:9090/api/v1/push"
+  }
+}
+
+// Loki exporter - For logs
+otelcol.exporter.loki "default" {
+  // Forward logs to Loki
+  forward_to = [loki.write.logs.receiver]
+}
+
+// Loki write configuration
+loki.write "logs" {
+  // Configure Loki endpoint
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+  
+  // Add basic labels for identification
+  labels {
+    job = "alloy"
+  }
+}
+
+// Tempo exporter - For traces
+otelcol.exporter.otlp "tempo" {
+  // Configure client for sending traces to Tempo
+  client {
+    endpoint = "tempo:4319" // Inside Docker network, use service name and internal port
+    tls {
+      insecure = true
+    }
+  }
+}
