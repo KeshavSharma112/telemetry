@@ -68,35 +68,47 @@ data:
     // Application pod logs collection
     otelcol.receiver.filelog "app_pod_logs" {
       include = ["/var/log/pods/*/*/*.log"]
+      exclude = []
+      start_at = "beginning"
       
       // Process Kubernetes pod logs format
       operators = [
         // Extract pod and container metadata from the filepath
         {
           type = "regex_parser",
-          regex = "^/var/log/pods/(?P<pod_uid>[^/]+)/(?P<container_name>[^/]+)/(?P<file_number>[0-9]+).log$",
-          parse_from = "attributes.file.path",
+          regex = "^/var/log/pods/(?P<namespace>[^_]+)_(?P<pod_name>[^_]+)_(?P<pod_uid>[^/]+)/(?P<container_name>[^/]+)/(?P<file_number>[0-9]+).log$",
+          parse_from = "attributes.log.file.path",
+          on_error = "send",
         },
-        // Parse the log JSON format
+        // Parse the log format (CRI format with timestamp prefix)
         {
-          type = "json_parser",
+          type = "regex_parser",
+          regex = "^(?P<time>[^ ^Z]+Z) (?P<stream>stdout|stderr) (?P<logtag>[^ ]*) ?(?P<log>.*)$",
           parse_from = "body",
+          on_error = "send",
           timestamp = {
             parse_from = "attributes.time",
             layout = "%Y-%m-%dT%H:%M:%S.%LZ",
           },
         },
-        // Extract log content
+        // Add stream type as attribute
+        {
+          type = "add",
+          field = "attributes.stream",
+          value = "EXPR(attributes.stream)",
+        },
+        // Try to parse JSON if present - without the problematic condition
+        {
+          type = "json_parser",
+          parse_from = "attributes.log",
+          on_error = "send",
+        },
+        // Move the log message to body
         {
           type = "move",
           from = "attributes.log",
           to = "body",
-        },
-        // Try to parse JSON for structured log messages
-        {
-          type = "json_parser",
-          parse_from = "body",
-          if = "EXPR($ matches '^{')",
+          on_error = "send",
         },
       ]
       
@@ -108,6 +120,64 @@ data:
     // System log collection
     otelcol.receiver.filelog "system_logs" {
       include = ["/var/log/*.log", "/var/log/messages", "/var/log/syslog"]
+      
+      output {
+        logs = [otelcol.processor.batch.default.input]
+      }
+    }
+
+    // Add a dedicated sidecar logs receiver to capture logs from the same pod
+    otelcol.receiver.filelog "sidecar_pod_logs" {
+      include = ["/var/log/containers/*node-app*.log"]
+      exclude = []
+      start_at = "beginning"
+      
+      // Operators for containerized application logs
+      operators = [
+        // Parse the Docker/containerd log format
+        {
+          type = "regex_parser",
+          regex = "^(?P<time>[^ ^Z]+Z) (?P<stream>stdout|stderr) (?P<logtag>[^ ]*) ?(?P<log>.*)$",
+          parse_from = "body",
+          on_error = "send",
+          timestamp = {
+            parse_from = "attributes.time",
+            layout = "%Y-%m-%dT%H:%M:%S.%LZ",
+          },
+        },
+        // Add stream type as attribute
+        {
+          type = "add",
+          field = "attributes.stream",
+          value = "EXPR(attributes.stream)",
+        },
+        // Add container name
+        {
+          type = "add",
+          field = "attributes.container_name",
+          value = "node-app",
+        },
+        // Add pod name
+        {
+          type = "add",
+          field = "attributes.pod_name",
+          value = "app",
+        },
+        // Try to parse JSON if present
+        {
+          type = "json_parser",
+          parse_from = "attributes.log",
+          on_error = "send",
+          if = "EXPR(attributes.log != nil)",
+        },
+        // Move log content to body
+        {
+          type = "move",
+          from = "attributes.log",
+          to = "body",
+          on_error = "send",
+        },
+      ]
       
       output {
         logs = [otelcol.processor.batch.default.input]

@@ -55,6 +55,9 @@ spec:
           value: "http://localhost:4318/v1/logs"
         - name: OTEL_EXPORTER_OTLP_PROTOCOL
           value: "http/json"
+        # Ensure logs go to stdout/stderr for container runtime to capture
+        - name: NODE_ENV
+          value: "production"
         # This ensures logs are accessible to the Alloy sidecar
         - name: OTEL_SDK_DISABLED
           value: "false"
