@@ -28,7 +28,8 @@ spec:
         configMap:
           name: alloy-config
       - name: varlog
-        emptyDir: {}
+        hostPath:
+          path: /var/log
       - name: varlibcontainers
         hostPath:
           path: /var/lib/docker/containers
