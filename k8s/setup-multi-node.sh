@@ -89,6 +89,9 @@ PF1=$!
 echo "Access your application at http://localhost:3001"
 kubectl port-forward -n telemetry-system svc/node-app 3001:3001 &
 PF2=$!
+echo "Forwarding OpenTelemetry collector endpoint to http://localhost:4318"
+kubectl port-forward -n telemetry-system svc/alloy-agent 4318:4318 &
+PF3=$!
 
 echo -e "${GREEN}Setup complete!${NC}"
 echo "To access services:"
@@ -106,4 +109,4 @@ echo "To clean up when done: ./cleanup-multi-node.sh"
 echo "Press Ctrl+C to stop port forwarding"
 
 # Wait for port-forwarding to be interrupted
-wait $PF1 $PF2
+wait $PF1 $PF2 $PF3
