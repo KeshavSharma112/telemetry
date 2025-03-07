@@ -1,0 +1,111 @@
+# FastAPI application deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fastapi-app
+  namespace: telemetry-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fastapi-app
+  template:
+    metadata:
+      labels:
+        app: fastapi-app
+        node-type: application
+        service: fastapi-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        loki.grafana.com/scrape: "true"
+        loki.grafana.com/format: "json"
+        loki.grafana.com/app: "fastapi-app"
+        loki.grafana.com/service: "fastapi-service"
+    spec:
+      nodeSelector:
+        role: application
+      volumes:
+      - name: alloy-config
+        configMap:
+          name: alloy-config
+      - name: varlog
+        hostPath:
+          path: /var/log
+      - name: varlibcontainers
+        hostPath:
+          path: /var/lib/docker/containers
+      - name: proc
+        hostPath:
+          path: /proc
+      containers:
+      - name: fastapi-app
+        image: testfastapi-app:latest  # Use your image name
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+        env:
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://localhost:4317"
+        - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+          value: "http://localhost:4317/v1/traces"
+        - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+          value: "http://localhost:4317/v1/metrics"
+        - name: OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
+          value: "http://localhost:4317/v1/logs"
+        - name: OTEL_EXPORTER_OTLP_PROTOCOL
+          value: "grpc"
+        - name: OTEL_SDK_DISABLED
+          value: "false"
+        - name: SERVICE_NAME
+          value: "fastapi-service"
+        - name: OTEL_PYTHON_LOG_CORRELATION
+          value: "true"
+        - name: OTEL_LOGS_EXPORTER
+          value: "otlp"
+        - name: OTEL_SERVICE_NAME
+          value: "fastapi-service"
+        # Important for FastAPI app environment variables
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        # Add volume mount to share logs
+        volumeMounts:
+        - name: varlog
+          mountPath: /var/log
+        - name: varlibcontainers
+          mountPath: /var/lib/docker/containers
+          readOnly: true
+      # Add alloy collector as a sidecar
+      - name: alloy-sidecar
+        image: grafana/alloy:latest
+        args: ["run", "--stability.level=public-preview", "--server.http.listen-addr=0.0.0.0:12345", "/etc/alloy/config.alloy"]
+        ports:
+        - containerPort: 4317
+        - containerPort: 4318
+        - containerPort: 12345
+        volumeMounts:
+        - name: alloy-config
+          mountPath: /etc/alloy/config.alloy
+          subPath: config.alloy
+        - name: varlog
+          mountPath: /var/log
+          readOnly: true
+        - name: varlibcontainers
+          mountPath: /var/lib/docker/containers
+          readOnly: true
+        - name: proc
+          mountPath: /proc
+          readOnly: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fastapi-app
+  namespace: telemetry-system
+spec:
+  selector:
+    app: fastapi-app
+  ports:
+  - port: 8000
+    targetPort: 8000
+  type: ClusterIP

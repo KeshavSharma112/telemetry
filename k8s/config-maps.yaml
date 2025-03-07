@@ -29,37 +29,6 @@ data:
     otelcol.receiver.filelog "container_logs" {
       include = ["/var/lib/docker/containers/*/*.log"]
       
-      // These operators process container logs in the Kubernetes/Docker format
-      operators = [
-        // Extract container metadata from the filename
-        {
-          type = "regex_parser",
-          regex = "^/var/lib/docker/containers/(?P<container_id>[^/]+)/(?P<file_name>.+)$",
-          parse_from = "attributes.file.path",
-        },
-        // Parse the Docker JSON log format
-        {
-          type = "json_parser",
-          parse_from = "body",
-          timestamp = {
-            parse_from = "attributes.time",
-            layout = "%Y-%m-%dT%H:%M:%S.%LZ",
-          },
-        },
-        // Extract log line from Docker's log field
-        {
-          type = "move",
-          from = "attributes.log",
-          to = "body",
-        },
-        // Try to parse JSON from log messages that are JSON
-        {
-          type = "json_parser",
-          parse_from = "body",
-          if = "EXPR($ matches '^{')",
-        },
-      ]
-      
       output {
         logs = [otelcol.processor.batch.default.input]
       }
@@ -70,47 +39,6 @@ data:
       include = ["/var/log/pods/*/*/*.log"]
       exclude = []
       start_at = "beginning"
-      
-      // Process Kubernetes pod logs format
-      operators = [
-        // Extract pod and container metadata from the filepath
-        {
-          type = "regex_parser",
-          regex = "^/var/log/pods/(?P<namespace>[^_]+)_(?P<pod_name>[^_]+)_(?P<pod_uid>[^/]+)/(?P<container_name>[^/]+)/(?P<file_number>[0-9]+).log$",
-          parse_from = "attributes.log.file.path",
-          on_error = "send",
-        },
-        // Parse the log format (CRI format with timestamp prefix)
-        {
-          type = "regex_parser",
-          regex = "^(?P<time>[^ ^Z]+Z) (?P<stream>stdout|stderr) (?P<logtag>[^ ]*) ?(?P<log>.*)$",
-          parse_from = "body",
-          on_error = "send",
-          timestamp = {
-            parse_from = "attributes.time",
-            layout = "%Y-%m-%dT%H:%M:%S.%LZ",
-          },
-        },
-        // Add stream type as attribute
-        {
-          type = "add",
-          field = "attributes.stream",
-          value = "EXPR(attributes.stream)",
-        },
-        // Try to parse JSON if present - without the problematic condition
-        {
-          type = "json_parser",
-          parse_from = "attributes.log",
-          on_error = "send",
-        },
-        // Move the log message to body
-        {
-          type = "move",
-          from = "attributes.log",
-          to = "body",
-          on_error = "send",
-        },
-      ]
       
       output {
         logs = [otelcol.processor.batch.default.input]
@@ -132,52 +60,18 @@ data:
       exclude = []
       start_at = "beginning"
       
-      // Operators for containerized application logs
-      operators = [
-        // Parse the Docker/containerd log format
-        {
-          type = "regex_parser",
-          regex = "^(?P<time>[^ ^Z]+Z) (?P<stream>stdout|stderr) (?P<logtag>[^ ]*) ?(?P<log>.*)$",
-          parse_from = "body",
-          on_error = "send",
-          timestamp = {
-            parse_from = "attributes.time",
-            layout = "%Y-%m-%dT%H:%M:%S.%LZ",
-          },
-        },
-        // Add stream type as attribute
-        {
-          type = "add",
-          field = "attributes.stream",
-          value = "EXPR(attributes.stream)",
-        },
-        // Add container name
-        {
-          type = "add",
-          field = "attributes.container_name",
-          value = "node-app",
-        },
-        // Add pod name
-        {
-          type = "add",
-          field = "attributes.pod_name",
-          value = "app",
-        },
-        // Try to parse JSON if present
-        {
-          type = "json_parser",
-          parse_from = "attributes.log",
-          on_error = "send",
-          if = "EXPR(attributes.log != nil)",
-        },
-        // Move log content to body
-        {
-          type = "move",
-          from = "attributes.log",
-          to = "body",
-          on_error = "send",
-        },
-      ]
+      
+      output {
+        logs = [otelcol.processor.batch.default.input]
+      }
+    }
+
+    // Add a dedicated fastapi logs receiver to capture logs from the FastAPI pod
+    otelcol.receiver.filelog "fastapi_pod_logs" {
+      include = ["/var/log/containers/*fastapi-app*.log"]
+      exclude = []
+      start_at = "beginning"
+
       
       output {
         logs = [otelcol.processor.batch.default.input]
@@ -303,21 +197,45 @@ metadata:
   name: grafana-config
   namespace: telemetry-system
 data:
+  grafana.ini: |
+    [server]
+    http_addr = 0.0.0.0
+    http_port = 3000
+    domain = localhost
+    root_url = %(protocol)s://%(domain)s:%(http_port)s/
+    serve_from_sub_path = false
+
+    [auth.anonymous]
+    enabled = true
+    org_role = Admin
+
+    [analytics]
+    reporting_enabled = false
+    check_for_updates = false
+
+    [paths]
+    logs = /var/log/grafana
+    data = /var/lib/grafana
+
+    [log]
+    mode = console
+    level = info
+
   datasources.yaml: |
     apiVersion: 1
     datasources:
-      - name: Prometheus
-        type: prometheus
-        access: proxy
-        url: http://prometheus:9090
-        isDefault: false
-      - name: Tempo
-        type: tempo
-        access: proxy
-        url: http://tempo:3200
-        isDefault: false
-      - name: Loki
-        type: loki
-        access: proxy
-        url: http://loki:3100
-        isDefault: true
+    - name: Prometheus
+      type: prometheus
+      access: proxy
+      url: http://prometheus:9090
+      isDefault: false
+    - name: Tempo
+      type: tempo
+      access: proxy
+      url: http://tempo:3200
+      isDefault: false
+    - name: Loki
+      type: loki
+      access: proxy
+      url: http://loki:3100
+      isDefault: true

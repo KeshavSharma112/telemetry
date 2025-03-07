@@ -71,8 +71,30 @@ spec:
       containers:
       - name: grafana
         image: grafana/grafana:latest
+        command:
+        - /bin/bash
+        - -c
+        - |
+          GF_SERVER_HTTP_ADDR=0.0.0.0 /run.sh
         ports:
         - containerPort: 3000
+          name: http
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: http
+          initialDelaySeconds: 30
+          timeoutSeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: http
+          initialDelaySeconds: 60
+          timeoutSeconds: 5
+          failureThreshold: 10
+          periodSeconds: 10
         env:
         - name: GF_AUTH_ANONYMOUS_ENABLED
           value: "true"
@@ -82,6 +104,8 @@ spec:
           value: "true"
         - name: GF_FEATURE_TOGGLES_ENABLE
           value: "tempoApmTable"
+        - name: GF_SERVER_HTTP_ADDR
+          value: "0.0.0.0"
         volumeMounts:
         - name: grafana-config
           mountPath: /etc/grafana/provisioning
@@ -240,4 +264,26 @@ spec:
   ports:
   - port: 3100
     targetPort: 3100
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alloy-collector
+  namespace: telemetry-system
+  labels:
+    app: alloy-collector
+spec:
+  selector:
+    app: node-app
+  ports:
+  - name: otlp-http
+    port: 4318
+    targetPort: 4318
+  - name: otlp-grpc
+    port: 4317
+    targetPort: 4317
+  - name: alloy-http
+    port: 12345
+    targetPort: 12345
   type: ClusterIP

@@ -30,18 +30,69 @@ if pgrep -f "port-forward" > /dev/null; then
     done
 fi
 
-# Step 2: Release all commonly used ports
-echo -e "\n${YELLOW}Step 2: Releasing commonly used ports...${NC}"
-for port in 3000 3001 4317 4318 8080 9090 9411 3100 16686; do
-    if lsof -i :$port >/dev/null 2>&1; then
-        echo -e "Releasing port $port"
-        for pid in $(lsof -ti :$port 2>/dev/null); do
-            echo "Killing process using port $port (PID: $pid)"
-            kill -9 $pid 2>/dev/null || true
-        done
-    else
-        echo -e "Port $port is already free"
+# Step 2: Release all commonly used ports - ENHANCED SECTION
+echo -e "\n${YELLOW}Step 2: Releasing ALL ports used by our services...${NC}"
+# Define all ports used in our deployment
+PORTS_TO_CLEAR=(
+    # Application ports
+    3000  # Grafana
+    3001  # Node.js app
+    8000  # FastAPI app
+    
+    # Infrastructure ports
+    4317  # OTLP gRPC
+    4318  # OTLP HTTP
+    9090  # Prometheus
+    9411  # Zipkin
+    3100  # Loki
+    3200  # Tempo
+    12345 # Alloy HTTP
+    8080  # Generic HTTP (sometimes used)
+    16686 # Jaeger UI (if used)
+)
+
+# Multiple methods to ensure ports are released
+for port in "${PORTS_TO_CLEAR[@]}"; do
+    echo -e "Checking port $port..."
+    
+    # Method 1: Using lsof
+    if command -v lsof &> /dev/null; then
+        if lsof -i :$port >/dev/null 2>&1; then
+            echo -e "Releasing port $port (lsof method)"
+            for pid in $(lsof -ti :$port 2>/dev/null); do
+                echo "Killing process using port $port (PID: $pid)"
+                kill -9 $pid 2>/dev/null || true
+            done
+        fi
     fi
+    
+    # Method 2: Using netstat (Linux)
+    if command -v netstat &> /dev/null; then
+        for pid in $(netstat -tlnp 2>/dev/null | grep ":$port " | awk '{print $7}' | cut -d/ -f1 | sort -u); do
+            if [ ! -z "$pid" ]; then
+                echo "Killing process using port $port (PID: $pid) (netstat method)"
+                kill -9 $pid 2>/dev/null || true
+            fi
+        done
+    fi
+    
+    # Method 3: Using ss (modern Linux)
+    if command -v ss &> /dev/null; then
+        for pid in $(ss -tlnp 2>/dev/null | grep ":$port " | awk '{print $7}' | cut -d, -f2 | cut -d= -f2 | sort -u); do
+            if [ ! -z "$pid" ]; then
+                echo "Killing process using port $port (PID: $pid) (ss method)"
+                kill -9 $pid 2>/dev/null || true
+            fi
+        done
+    fi
+    
+    # Method 4: Using fuser (some Unix systems)
+    if command -v fuser &> /dev/null; then
+        echo "Releasing port $port (fuser method)"
+        fuser -k ${port}/tcp 2>/dev/null || true
+    fi
+    
+    echo -e "Port $port should now be free"
 done
 
 # Step 3: Delete all resources in the telemetry-system namespace with force
@@ -99,6 +150,9 @@ for resource in pods services deployments statefulsets configmaps secrets daemon
     
     kubectl get $resource --all-namespaces -l app=node-app 2>/dev/null | grep -v "No resources" && \
     kubectl delete $resource --all-namespaces -l app=node-app --force --grace-period=0 2>/dev/null || true
+    
+    kubectl get $resource --all-namespaces -l app=fastapi-app 2>/dev/null | grep -v "No resources" && \
+    kubectl delete $resource --all-namespaces -l app=fastapi-app --force --grace-period=0 2>/dev/null || true
 done
 
 # Step 5: Remove node labels
@@ -114,8 +168,8 @@ echo -e "\n${YELLOW}Step 6: Cleaning up related Docker containers and images...$
 if command -v docker &> /dev/null; then
     echo "Stopping and removing related containers..."
     # Stop any containers related to the telemetry stack
-    docker ps | grep -E "grafana|prometheus|loki|tempo|alloy|telemetry|node-app" | awk '{print $1}' | xargs -r docker stop 2>/dev/null || true
-    docker ps -a | grep -E "grafana|prometheus|loki|tempo|alloy|telemetry|node-app" | awk '{print $1}' | xargs -r docker rm 2>/dev/null || true
+    docker ps | grep -E "grafana|prometheus|loki|tempo|alloy|telemetry|node-app|fastapi-app" | awk '{print $1}' | xargs -r docker stop 2>/dev/null || true
+    docker ps -a | grep -E "grafana|prometheus|loki|tempo|alloy|telemetry|node-app|fastapi-app" | awk '{print $1}' | xargs -r docker rm 2>/dev/null || true
     
     echo "Removing unused Docker networks..."
     docker network prune -f 2>/dev/null || true
@@ -137,10 +191,16 @@ else
 fi
 
 echo "Verifying that critical ports are free..."
-for port in 3000 3001 4318; do
-    if lsof -i :$port &>/dev/null; then
+for port in "${PORTS_TO_CLEAR[@]}"; do
+    if command -v lsof &> /dev/null && lsof -i :$port &>/dev/null; then
         echo -e "${RED}Warning: Port $port is still in use${NC}"
         lsof -i :$port
+    elif command -v netstat &> /dev/null && netstat -tulpn 2>/dev/null | grep -q ":$port "; then
+        echo -e "${RED}Warning: Port $port is still in use${NC}"
+        netstat -tulpn | grep ":$port "
+    elif command -v ss &> /dev/null && ss -tulpn | grep -q ":$port "; then
+        echo -e "${RED}Warning: Port $port is still in use${NC}"
+        ss -tulpn | grep ":$port "
     else
         echo -e "${GREEN}Port $port is free${NC}"
     fi
